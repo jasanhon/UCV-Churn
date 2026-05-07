@@ -214,6 +214,17 @@ def clean_calidad(df: pd.DataFrame) -> pd.DataFrame:
     if n_dup > 0:
         print(f"[clean_calidad] Eliminados {n_dup} duplicados exactos")
 
+    # Normalizar tipo_zona — corregir errores tipográficos del dataset
+    mapa_zona = {
+        'suburbanx': 'suburbana',
+        'urbana??':  'urbana_premium',
+        'rural-1':   'rural',
+    }
+    n_corr = df['tipo_zona'].isin(mapa_zona.keys()).sum()
+    if n_corr > 0:
+        print(f"[clean_calidad] {n_corr} valores de tipo_zona corregidos: {list(mapa_zona.keys())}")
+        df['tipo_zona'] = df['tipo_zona'].replace(mapa_zona)
+
     # Cobertura fuera de [0, 100]
     for col in ["cobertura_4g_pct", "cobertura_5g_pct", "tasa_cortes_pct"]:
         mask = (df[col] < 0) | (df[col] > 100)
