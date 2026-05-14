@@ -19,51 +19,97 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 from config.config import FILES_PROCESSED
 
 
+# =============================================================================
+# FUNCIONES AUXILIARES DE INFRAESTRUCTURA
+# =============================================================================
+
+def _preparar_limpieza(df, entidad, id_col=None):
+    """
+    Realiza las operaciones de limpieza transversales a todos los datasets:
+    1. Generación de copia profunda para integridad de memoria.
+    2. Eliminación de duplicados exactos (registros idénticos).
+    3. Eliminación de duplicados por identificador único si se requiere.
+    """
+    df_clean = df.copy()
+    n_ini = len(df_clean)
+    
+    # Limpieza de duplicados exactos
+    n_dup = df_clean.duplicated().sum()
+    df_clean = df_clean.drop_duplicates()
+    if n_dup > 0:
+        print(f"[{entidad}] INFO: Eliminados {n_dup} registros duplicados exactos.")
+
+    # Limpieza por identificador (ej. cliente_id) para asegurar unicidad
+    if id_col and id_col in df_clean.columns:
+        n_dup_id = df_clean.duplicated(subset=[id_col]).sum()
+        df_clean = df_clean.drop_duplicates(subset=[id_col], keep="first")
+        if n_dup_id > 0:
+            print(f"[{entidad}] INFO: Eliminados {n_dup_id} registros duplicados por {id_col}.")
+            
+    return df_clean, n_ini
+
+
+def normalizar_tipo_zona(df: pd.DataFrame, columna: str = "tipo_zona") -> pd.DataFrame:
+    """
+    Corrige valores erróneos de tipo_zona.
+    """
+
+    mapa_zona = {
+        'suburbanx': 'suburbana',
+        'urbana??':  'urbana_premium',
+        'rural-1':   'rural',
+    }
+
+    n_corr = df[columna].isin(mapa_zona.keys()).sum()
+
+    if n_corr > 0:
+        print(
+            f"[normalizar_tipo_zona] "
+            f"{n_corr} valores corregidos: {list(mapa_zona.keys())}"
+        )
+
+        df[columna] = df[columna].replace(mapa_zona)
+
+    return df
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # CLIENTES
 # ══════════════════════════════════════════════════════════════════════════════
 
 def clean_clientes(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Limpieza de clientes.csv:
-    - Elimina duplicados exactos
-    - Elimina clientes duplicados por cliente_id (keepea el primero)
-    - Elimina edades fuera de rango (< 18 o > 100)
-    - Imputa antigüedad negativa a 0
-    - Normaliza tipo_plan a título (Básico, Estándar, Premium, Prepago, Contrato)
+    Procesa la tabla maestra de clientes aplicando reglas de integridad:
+    - Normalización de rangos de edad (18-100 años).
+    - Corrección de valores de antigüedad fuera de dominio (negativos).
+    - Estandarización de categorías de planes comerciales.
     """
-    n_ini = len(df)
-    df = df.copy()
+    # Ejecución de limpieza estructural
+    df, n_ini = _preparar_limpieza(df, "Clientes", id_col="cliente_id")
+    
+    # Normalizar tipo_zona — corregir errores tipográficos del dataset
+    df = normalizar_tipo_zona(df)
 
-    # Duplicados exactos
-    n_dup = df.duplicated().sum()
-    df = df.drop_duplicates()
-    if n_dup > 0:
-        print(f"[clean_clientes] Eliminados {n_dup} duplicados exactos")
-
-    # Duplicados por cliente_id
-    n_dup_id = df.duplicated(subset=["cliente_id"]).sum()
-    df = df.drop_duplicates(subset=["cliente_id"], keep="first")
-    if n_dup_id > 0:
-        print(f"[clean_clientes] Eliminados {n_dup_id} duplicados de cliente_id")
-
-    # Edades fuera de rango → NaN (no eliminamos la fila, solo el valor)
+    # Tratamiento de Edad: Valores fuera de rango lógico se marcan como nulos
+    # para su posterior imputación en el pipeline de modelado.
     mask_edad = (df["edad"] < 18) | (df["edad"] > 100)
     if mask_edad.sum() > 0:
-        print(f"[clean_clientes] {mask_edad.sum()} edades fuera de rango → NaN")
+        print(f"[Clientes] INFO: {mask_edad.sum()} edades fuera de rango ajustadas a NaN.")
         df.loc[mask_edad, "edad"] = np.nan
 
-    # Antigüedad negativa → 0
-    mask_ant = pd.to_numeric(df["antiguedad_meses"], errors="coerce") < 0
+    # Tratamiento de Antigüedad: Corrección de errores en la fecha de alta
+    # que generan meses negativos, normalizándolos a valor cero.
+    df["antiguedad_meses"] = pd.to_numeric(df["antiguedad_meses"], errors="coerce")
+    mask_ant = df["antiguedad_meses"] < 0
     if mask_ant.sum() > 0:
-        print(f"[clean_clientes] {mask_ant.sum()} antigüedades negativas → 0")
+        print(f"[Clientes] INFO: {mask_ant.sum()} antigüedades negativas normalizadas a 0.")
         df.loc[mask_ant, "antiguedad_meses"] = 0
 
-    # Normalizar tipo_plan
+    # Normalización de Planes: Estandarización de strings para evitar 
+    # duplicidad de categorías por errores de capitalización o espacios.
     df["tipo_plan"] = df["tipo_plan"].str.strip().str.title()
 
-    print(f"[clean_clientes] {n_ini:,} → {len(df):,} filas | "
-          f"Nulos restantes: {df.isnull().sum().sum()}")
+    print(f"[clean_clientes] Resultado: {n_ini:,} -> {len(df):,} filas | Nulos: {df.isnull().sum().sum()}")
     return df
 
 
@@ -78,14 +124,7 @@ def clean_churn(df: pd.DataFrame) -> pd.DataFrame:
     - Valida que churn solo tome valores 0 o 1
     - Ordena por cliente_id y fecha
     """
-    n_ini = len(df)
-    df = df.copy()
-
-    # Duplicados exactos
-    n_dup = df.duplicated().sum()
-    df = df.drop_duplicates()
-    if n_dup > 0:
-        print(f"[clean_churn] Eliminados {n_dup} duplicados exactos")
+    df, n_ini = _preparar_limpieza(df, "Facturacion")
 
     # Duplicados cliente-fecha
     n_dup_cf = df.duplicated(subset=["cliente_id", "fecha"]).sum()
@@ -101,7 +140,7 @@ def clean_churn(df: pd.DataFrame) -> pd.DataFrame:
 
     df = df.sort_values(["cliente_id", "fecha"]).reset_index(drop=True)
 
-    print(f"[clean_churn] {n_ini:,} → {len(df):,} filas")
+    print(f"[clean_churn] Resultado: {n_ini:,} -> {len(df):,} filas | Nulos: {df.isnull().sum().sum()}")
     return df
 
 
@@ -118,14 +157,7 @@ def clean_facturacion(df: pd.DataFrame) -> pd.DataFrame:
     - Normaliza tipo_plan
     - Ordena por cliente_id y fecha
     """
-    n_ini = len(df)
-    df = df.copy()
-
-    # Duplicados
-    n_dup = df.duplicated().sum()
-    df = df.drop_duplicates()
-    if n_dup > 0:
-        print(f"[clean_facturacion] Eliminados {n_dup} duplicados exactos")
+    df, n_ini = _preparar_limpieza(df, "Facturacion")
 
     # importe_total nulo → documentamos, dejamos NaN
     n_nulos_imp = df["importe_total"].isnull().sum()
@@ -145,7 +177,7 @@ def clean_facturacion(df: pd.DataFrame) -> pd.DataFrame:
     # Ordenar
     df = df.sort_values(["cliente_id", "fecha"]).reset_index(drop=True)
 
-    print(f"[clean_facturacion] {n_ini:,} → {len(df):,} filas")
+    print(f"[clean_facturacion] Resultado: {n_ini:,} -> {len(df):,} filas | Nulos: {df.isnull().sum().sum()}")
     return df
 
 
@@ -161,14 +193,7 @@ def clean_soporte(df: pd.DataFrame) -> pd.DataFrame:
     - Valida que resuelto sea 0 o 1
     - Valida que satisfaccion_post esté entre 1 y 5
     """
-    n_ini = len(df)
-    df = df.copy()
-
-    # Duplicados
-    n_dup = df.duplicated().sum()
-    df = df.drop_duplicates()
-    if n_dup > 0:
-        print(f"[clean_soporte] Eliminados {n_dup} duplicados exactos")
+    df, n_ini = _preparar_limpieza(df, "Soporte")
 
     # Duración negativa o extrema
     mask_dur = (df["duracion_min"] < 0) | (df["duracion_min"] > 300)
@@ -190,7 +215,7 @@ def clean_soporte(df: pd.DataFrame) -> pd.DataFrame:
 
     df = df.sort_values(["cliente_id", "fecha_evento"]).reset_index(drop=True)
 
-    print(f"[clean_soporte] {n_ini:,} → {len(df):,} filas")
+    print(f"[clean_soporte] Resultado: {n_ini:,} -> {len(df):,} filas | Nulos: {df.isnull().sum().sum()}")
     return df
 
 
@@ -205,25 +230,10 @@ def clean_calidad(df: pd.DataFrame) -> pd.DataFrame:
     - Valida rangos de cobertura (0-100%), latencia (> 0), velocidad (> 0)
     - Valida incidencia_masiva en {0, 1}
     """
-    n_ini = len(df)
-    df = df.copy()
-
-    # Duplicados
-    n_dup = df.duplicated().sum()
-    df = df.drop_duplicates()
-    if n_dup > 0:
-        print(f"[clean_calidad] Eliminados {n_dup} duplicados exactos")
+    df, n_ini = _preparar_limpieza(df, "Calidad")
 
     # Normalizar tipo_zona — corregir errores tipográficos del dataset
-    mapa_zona = {
-        'suburbanx': 'suburbana',
-        'urbana??':  'urbana_premium',
-        'rural-1':   'rural',
-    }
-    n_corr = df['tipo_zona'].isin(mapa_zona.keys()).sum()
-    if n_corr > 0:
-        print(f"[clean_calidad] {n_corr} valores de tipo_zona corregidos: {list(mapa_zona.keys())}")
-        df['tipo_zona'] = df['tipo_zona'].replace(mapa_zona)
+    df = normalizar_tipo_zona(df)
 
     # Cobertura fuera de [0, 100]
     for col in ["cobertura_4g_pct", "cobertura_5g_pct", "tasa_cortes_pct"]:
@@ -241,7 +251,7 @@ def clean_calidad(df: pd.DataFrame) -> pd.DataFrame:
 
     df = df.sort_values(["zona_id", "fecha"]).reset_index(drop=True)
 
-    print(f"[clean_calidad] {n_ini:,} → {len(df):,} filas")
+    print(f"[clean_calidad] Resultado: {n_ini:,} -> {len(df):,} filas | Nulos: {df.isnull().sum().sum()}")
     return df
 
 
@@ -256,14 +266,7 @@ def clean_encuestas(df: pd.DataFrame) -> pd.DataFrame:
     - Valida rangos de puntuacion_general (1-5) y nps (0-10)
     - Elimina filas sin texto_libre (no aportan para NLP)
     """
-    n_ini = len(df)
-    df = df.copy()
-
-    # Duplicados
-    n_dup = df.duplicated().sum()
-    df = df.drop_duplicates()
-    if n_dup > 0:
-        print(f"[clean_encuestas] Eliminados {n_dup} duplicados exactos")
+    df, n_ini = _preparar_limpieza(df, "Encuestas")
 
     # Puntuación general fuera de [1, 5]
     mask_pun = (df["puntuacion_general_1a5"] < 1) | (df["puntuacion_general_1a5"] > 5)
@@ -284,7 +287,7 @@ def clean_encuestas(df: pd.DataFrame) -> pd.DataFrame:
 
     df = df.sort_values(["zona_id", "fecha"]).reset_index(drop=True)
 
-    print(f"[clean_encuestas] {n_ini:,} → {len(df):,} filas")
+    print(f"[clean_encuestas] Resultado: {n_ini:,} -> {len(df):,} filas | Nulos: {df.isnull().sum().sum()}")
     return df
 
 

@@ -46,6 +46,12 @@ def features_facturacion(factura: pd.DataFrame) -> pd.DataFrame:
         n_meses_facturados     = ("importe_total",        "count"),
     ).reset_index()
 
+    # ⚠️  ADVERTENCIA — n_meses_facturados NO debe usarse como feature en el modelo binario.
+    # Un cliente que abandonó en el mes 6 tiene 6 meses facturados; uno activo tiene 36.
+    # El modelo aprendería que "pocos meses = churn" por ser consecuencia del target,
+    # no una causa. En producción esta información no existe para clientes futuros.
+    # Úsala solo para análisis descriptivo. Excluirla en el pipeline de modelado.
+
     # Plan dominante (el que aparece más meses)
     plan_dom = (
         factura.dropna(subset=["tipo_plan"])

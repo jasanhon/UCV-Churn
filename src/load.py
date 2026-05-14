@@ -33,6 +33,11 @@ def load_clientes(path=None) -> pd.DataFrame:
 
 
 def load_churn(path=None) -> pd.DataFrame:
+    """
+    Carga churn_target.csv.
+    Columnas: cliente_id, fecha, churn (0/1)
+    La columna fecha tiene formatos mixtos — se parsea con format='mixed'.
+    """
     path = path or FILES["churn"]
     df = pd.read_csv(path)
     df["fecha"] = pd.to_datetime(df["fecha"], format="mixed", dayfirst=True)
@@ -62,7 +67,9 @@ def load_soporte(path=None) -> pd.DataFrame:
     path = path or FILES["soporte"]
     df = pd.read_csv(path)
     df["fecha_evento"] = pd.to_datetime(df["fecha_evento"], format="mixed", dayfirst=True)  # ← cambio aquí
-    df["mes"]          = pd.to_datetime(df["mes"],          format="mixed", dayfirst=True)  # ← y aquí por si acaso
+    # 'mes' es una columna derivada que puede no estar en el CSV original
+    if "mes" in df.columns:
+        df["mes"] = pd.to_datetime(df["mes"], format="mixed", dayfirst=True)
     print(f"[load] soporte:     {df.shape[0]:,} filas x {df.shape[1]} columnas")
     return df
 
