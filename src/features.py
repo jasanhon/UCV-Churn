@@ -90,17 +90,25 @@ def features_soporte(soporte: pd.DataFrame) -> pd.DataFrame:
     Agrega el soporte a nivel cliente.
     Genera métricas resumen y distribución de motivos y canales.
     """
+    # ── Agregación de variables de soporte ───────────────────────────────────
+    # NOTA sobre impago_mes y dias_retraso_mes:
+    # Estas columnas vienen del CSV de soporte pero son datos de facturación
+    # que se unieron al generar el dataset. Son redundantes con las que calcula
+    # features_facturacion() y pueden introducir doble conteo en el modelo.
+    # Se mantienen aquí porque en el dataset binario pueden aportar contexto
+    # (el cliente llama a soporte en meses con impago), pero NO deben usarse
+    # en el dataset panel — allí ya vienen de facturación con lag correcto.
     agg = soporte.groupby("cliente_id").agg(
-        n_interacciones       = ("interaccion_id",    "count"),
-        tasa_resolucion       = ("resuelto",          "mean"),
-        satisfaccion_media    = ("satisfaccion_post", "mean"),
-        duracion_media_min    = ("duracion_min",      "mean"),
-        n_impagos_sop         = ("impago_mes",        "sum"),
-        dias_retraso_sop      = ("dias_retraso_mes",  "sum"),
-        stress_sop_medio      = ("stress_calidad_lag","mean"),
+        n_interacciones       = ("interaccion_id",       "count"),
+        tasa_resolucion       = ("resuelto",             "mean"),
+        satisfaccion_media    = ("satisfaccion_post",    "mean"),
+        duracion_media_min    = ("duracion_min",         "mean"),
+        n_impagos_sop         = ("impago_mes",           "sum"),   # ver nota arriba
+        dias_retraso_sop      = ("dias_retraso_mes",     "sum"),   # ver nota arriba
+        stress_sop_medio      = ("stress_calidad_lag",   "mean"),
         n_incid_masivas_sop   = ("incidencia_masiva_lag","sum"),
-        n_canales_distintos   = ("canal",             "nunique"),
-        n_motivos_distintos   = ("motivo",            "nunique"),
+        n_canales_distintos   = ("canal",                "nunique"),
+        n_motivos_distintos   = ("motivo",               "nunique"),
     ).reset_index()
 
     # Motivos como columnas (one-hot count)
@@ -257,6 +265,7 @@ def build_dataset_panel(clientes: pd.DataFrame,
                         factura: pd.DataFrame,
                         soporte: pd.DataFrame,
                         calidad: pd.DataFrame,
+                        encuestas: pd.DataFrame = None,
                         save: bool = True) -> pd.DataFrame:
     """
     Construye el dataset panel con 1 fila por cliente-mes.
@@ -264,6 +273,10 @@ def build_dataset_panel(clientes: pd.DataFrame,
 
     Variables de facturación y soporte: se usan con lag de 1 mes.
     Variables de calidad de red: ya vienen con lag (stress_calidad_lag).
+    Variables de encuestas: sentimiento medio zonal con lag de 1 mes.
+      - encuestas es opcional (default None): si no se pasa, se omite.
+      - Como las encuestas son anónimas por zona, se usan como proxy
+        del sentimiento del entorno del cliente, igual que en build_dataset_final.
 
     Uso para el modelo temporal (Opción B del profesor).
     """
@@ -318,6 +331,28 @@ def build_dataset_panel(clientes: pd.DataFrame,
     calidad_mes = calidad_panel[["zona_id", "mes"] + calidad_cols]
     panel = panel.merge(calidad_mes, on=["zona_id", "mes"], how="left")
 
+    # ── Encuestas: sentimiento zonal con lag 1 ──────────────────────────────
+    # Las encuestas son anónimas por zona, no por cliente.
+    # Usamos el sentimiento medio de la zona del mes anterior como proxy.
+    # Mismo principio anti-leakage que facturación: mes T usa datos de T-1.
+    if encuestas is not None:
+        encuestas_panel = encuestas.copy()
+        encuestas_panel["mes"] = encuestas_panel["fecha"].dt.to_period("M")
+        enc_zona_mes = (
+            encuestas_panel
+            .groupby(["zona_id", "mes"])
+            .agg(
+                sentimiento_lag1   = ("sent_text_latente",      "mean"),
+                nps_lag1           = ("nps_0a10",               "mean"),
+                puntuacion_lag1    = ("puntuacion_general_1a5", "mean"),
+            )
+            .reset_index()
+        )
+        # Desplazar el mes +1 para que el sentimiento de T se use en T+1
+        enc_zona_mes["mes"] = enc_zona_mes["mes"] + 1
+        panel = panel.merge(enc_zona_mes, on=["zona_id", "mes"], how="left")
+        print(f"[build_dataset_panel] Encuestas añadidas: {enc_zona_mes.shape[0]:,} zona-mes")
+
     # ── Perfil del cliente (estático) ────────────────────────────────────────
     cols_perfil = ["cliente_id", "edad", "sexo", "estado_civil", "num_lineas",
                    "tipo_plan", "ingreso_estimado", "antiguedad_meses",
@@ -348,7 +383,8 @@ if __name__ == "__main__":
 
     df_final = build_dataset_final(**clean, save=True)
     df_panel  = build_dataset_panel(
-        clientes=clean["clientes"], churn=clean["churn"],
+        clientes=clean["clientes"],  churn=clean["churn"],
         factura=clean["facturacion"], soporte=clean["soporte"],
-        calidad=clean["calidad"], save=True
+        calidad=clean["calidad"],    encuestas=clean["encuestas"],
+        save=True
     )
