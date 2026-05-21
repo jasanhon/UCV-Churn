@@ -1,1 +1,18 @@
-# librerías de Python necesarias para ejecutar el proyecto
+# Core Data Science
+pandas
+numpy
+scipy
+
+# Machine Learning
+scikit-learn
+xgboost
+lightgbm
+shap
+
+# Visualización
+matplotlib
+seaborn
+
+# Entorno y Jupyter
+jupyter
+ipykernel
