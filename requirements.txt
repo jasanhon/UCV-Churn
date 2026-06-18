@@ -16,3 +16,4 @@ seaborn
 # Entorno y Jupyter
 jupyter
 ipykernel
+lifelines
